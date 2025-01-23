@@ -55,10 +55,10 @@ pub fn generate_key() -> [u8; 32] {
 }
 
 pub fn save_key_to_file(key: &[u8]) -> Result<(), io::Error> {
-    fs::write("aes.key", hex::encode(key))
+    fs::write("AES.key", hex::encode(key))
 }
 pub fn read_key_from_file() -> String {
-    if let Ok(key) = fs::read_to_string("aes.key") {
+    if let Ok(key) = fs::read_to_string("AES.key") {
         key
     } else {
         panic!("Key file not found");

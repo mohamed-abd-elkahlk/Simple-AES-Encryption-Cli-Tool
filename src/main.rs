@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .interact_text()?;
 
     let key_opration_items = vec!["Generate", "Use my own"];
-    let use_key_from_file = if fs::metadata("aes.key").is_ok() {
+    let use_key_from_file = if fs::metadata("AES.key").is_ok() {
         Confirm::new()
             .with_prompt(
                 "Do you want to use the key from the file [type Enter For Yes]?"
