@@ -3,22 +3,19 @@ pub const MAGIC_NUMBER_128: &[u8] = b"AES128ENC"; //*  Unique identifier for enc
 pub const MAGIC_NUMBER_192: &[u8] = b"AES192ENC"; //*
 
 use aes::cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt};
-use std::{error::Error, fs, io, iter, path::Path};
+use colored::Colorize;
+use std::{
+    error::Error,
+    fs::{self, File},
+    io::{self, Write},
+    iter,
+    path::Path,
+    usize,
+};
 fn check_if_encrypted(data: &[u8]) -> bool {
     data.starts_with(MAGIC_NUMBER_256)
         || data.starts_with(MAGIC_NUMBER_192)
         || data.starts_with(MAGIC_NUMBER_128)
-}
-fn check_encrypt_format(data: &[u8]) -> Option<&str> {
-    if data.starts_with(MAGIC_NUMBER_256) {
-        Some("AES-256")
-    } else if data.starts_with(MAGIC_NUMBER_192) {
-        Some("AES-192")
-    } else if data.starts_with(MAGIC_NUMBER_128) {
-        Some("AES-128")
-    } else {
-        None
-    }
 }
 
 #[macro_export]
@@ -69,18 +66,23 @@ pub fn encrypt_file(
     file_path: &str,
     magic_number: &[u8],
     cipher: impl BlockEncrypt,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn std::error::Error>> {
     let path = Path::new(file_path);
+
+    // Step 1: Read the original file content
     let mut data = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     // Check if the file is already encrypted
     if check_if_encrypted(&data) {
-        if let Some(format) = check_encrypt_format(&data) {
-            return Err(format!("File is already encrypted with {}", format).into());
-        }
+        return Err("File is already encrypted".into());
     }
 
-    // Padding (PKCS7-like manual padding for block size 16)
+    // Step 2: Create a temporary file for encryption
+    let temp_file_path = format!("{}.tmp", file_path);
+    let mut temp_file = File::create(&temp_file_path)
+        .map_err(|e| format!("Failed to create temporary file: {}", e))?;
+
+    // Step 3: Add padding to the file content (PKCS7-like padding)
     let padding = 16 - (data.len() % 16);
     data.extend(iter::repeat(padding as u8).take(padding));
 
@@ -89,18 +91,20 @@ pub fn encrypt_file(
         cipher.encrypt_block(GenericArray::from_mut_slice(chunk));
     }
 
-    // Prepend magic number to indicate encryption
-    let mut encrypted_data = magic_number.to_vec();
-    encrypted_data.extend_from_slice(&data);
+    // Step 4: Write the encrypted content (including the magic number) to the temporary file
+    temp_file.write_all(magic_number)?;
+    temp_file.write_all(&data)?;
+    temp_file.flush()?;
 
-    // Write the encrypted content back to the file
-    fs::write(path, &encrypted_data)
-        .map_err(|e| format!("Failed to write encrypted file: {}", e))?;
+    // Step 5: Replace the original file with the temporary file
+    fs::rename(&temp_file_path, file_path)
+        .map_err(|e| format!("Failed to replace original file with encrypted file: {}", e))?;
 
+    // Step 6: Success message
+    println!("{}", "File encrypted successfully.".red().bold());
     Ok(())
 }
 
-// Generic decryption function
 pub fn decrypt_file(
     file_path: &str,
     magic_number: &[u8],
@@ -109,41 +113,30 @@ pub fn decrypt_file(
     let path = Path::new(file_path);
     let mut data = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
-    // Check if the file is already encrypted
-    if check_if_encrypted(&data) {
-        if let Some(format) = check_encrypt_format(&data) {
-            // Validate magic number
-            if !data.starts_with(magic_number) {
-                return Err("Invalid or unsupported encryption format".into());
-            }
-            return Err(format!("File encrypted with {}", format).into());
-        }
-    } else {
-        return Err("File is not encrypted".into());
+    if !data.starts_with(magic_number) {
+        return Err("File is not encrypted or uses an unsupported format".into());
     }
-
-    // Remove the magic number
     data.drain(0..magic_number.len());
 
-    // Decrypt each 16-byte chunk
     for chunk in data.chunks_mut(16) {
         cipher.decrypt_block(GenericArray::from_mut_slice(chunk));
     }
 
-    // Remove PKCS7 padding
-    let padding_len = data.last().cloned().unwrap_or(0) as usize;
-    if padding_len > 16 || padding_len == 0 {
-        return Err("Invalid padding".into());
-    }
-    for i in 1..=padding_len {
-        if data[data.len() - i] != padding_len as u8 {
+    if let Some(&padding_len) = data.last() {
+        if padding_len == 0
+            || padding_len > 16
+            || !data[data.len() - padding_len as usize..]
+                .iter()
+                .all(|&b| b == padding_len)
+        {
             return Err("Invalid padding".into());
         }
+        data.truncate(data.len() - padding_len as usize);
+    } else {
+        return Err("File is too short to contain valid padding".into());
     }
-    data.truncate(data.len() - padding_len);
 
-    // Write the decrypted content back to the file
     fs::write(path, &data).map_err(|e| format!("Failed to write decrypted file: {}", e))?;
-
+    println!("File decrypted successfully.");
     Ok(())
 }
