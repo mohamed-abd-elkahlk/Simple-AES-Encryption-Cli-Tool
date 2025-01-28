@@ -12,7 +12,7 @@ use std::{
     path::Path,
     usize,
 };
-fn check_if_encrypted(data: &[u8]) -> bool {
+pub fn check_if_encrypted(data: &[u8]) -> bool {
     data.starts_with(MAGIC_NUMBER_256)
         || data.starts_with(MAGIC_NUMBER_192)
         || data.starts_with(MAGIC_NUMBER_128)
