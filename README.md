@@ -1,4 +1,4 @@
-# Simple Encryption Tool
+# CipherCLI
 
 ## Overview
 

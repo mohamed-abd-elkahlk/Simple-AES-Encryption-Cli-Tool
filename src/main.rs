@@ -2,7 +2,7 @@ use aes::{
     cipher::{generic_array::GenericArray, KeyInit},
     Aes128, Aes192, Aes256,
 };
-use aes_example::{
+use cipher_cli::{
     decrypt_file, encrypt_file, generate_key, read_key_from_file, save_key_to_file,
     MAGIC_NUMBER_128, MAGIC_NUMBER_192, MAGIC_NUMBER_256,
 };

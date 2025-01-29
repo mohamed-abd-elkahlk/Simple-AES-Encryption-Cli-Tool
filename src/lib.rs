@@ -4,14 +4,16 @@ pub const MAGIC_NUMBER_192: &[u8] = b"AES192ENC"; //*
 
 use aes::cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt};
 use colored::Colorize;
+use rayon::prelude::*;
 use std::{
     error::Error,
     fs::{self, File},
     io::{self, Write},
     iter,
-    path::Path,
+    path::{Path, PathBuf},
     usize,
 };
+
 pub fn check_if_encrypted(data: &[u8]) -> bool {
     data.starts_with(MAGIC_NUMBER_256)
         || data.starts_with(MAGIC_NUMBER_192)
@@ -139,4 +141,25 @@ pub fn decrypt_file(
     fs::write(path, &data).map_err(|e| format!("Failed to write decrypted file: {}", e))?;
     println!("File decrypted successfully.");
     Ok(())
+}
+
+pub fn files_dir_explorer(root_path: PathBuf) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    let mut files = Vec::new();
+    let mut dirs = vec![root_path];
+
+    while let Some(dir) = dirs.pop() {
+        let entries: Vec<_> = match fs::read_dir(&dir) {
+            Ok(entries) => entries.filter_map(Result::ok).collect(),
+            Err(_) => continue,
+        };
+
+        let (sub_dirs, file_paths): (Vec<_>, Vec<_>) = entries
+            .into_par_iter()
+            .partition(|entry| entry.path().is_dir());
+
+        dirs.extend(sub_dirs.into_iter().map(|entry| entry.path()));
+        files.extend(file_paths.into_iter().map(|entry| entry.path()));
+    }
+
+    Ok(files)
 }
