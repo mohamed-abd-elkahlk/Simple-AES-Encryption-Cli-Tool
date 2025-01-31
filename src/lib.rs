@@ -5,14 +5,20 @@ pub const MAGIC_NUMBER_192: &[u8] = b"AES192ENC"; //*
 use aes::cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt};
 use colored::Colorize;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use spinners::{Spinner, Spinners};
 use std::{
     error::Error,
     fs::{self, File},
-    io::{self, Write},
-    iter,
+    io::{self, BufWriter, Write},
     path::{Path, PathBuf},
+    sync::Arc,
     usize,
 };
+#[derive(Serialize, Deserialize)]
+pub struct EncryptedFilesPath {
+    pub path: Vec<PathBuf>,
+}
 
 pub fn check_if_encrypted(data: &[u8]) -> bool {
     data.starts_with(MAGIC_NUMBER_256)
@@ -64,55 +70,96 @@ pub fn read_key_from_file(size: usize) -> Result<Vec<u8>, Box<dyn std::error::Er
     Ok(hex::decode(hex_key)?)
 }
 
+use memmap2::MmapMut;
+
+// Function to encrypt a single file
 pub fn encrypt_file(
-    file_path: &str,
+    file_path: &Path,
     magic_number: &[u8],
-    cipher: impl BlockEncrypt,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let path = Path::new(file_path);
+    cipher: &impl BlockEncrypt,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    // Open file in read/write mode
+    let file = File::options().read(true).write(true).open(file_path)?;
 
-    // Step 1: Read the original file content
-    let mut data = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    // Step 1: Get file size and calculate padding
+    let file_size = file.metadata()?.len() as usize;
+    let padding = 16 - (file_size % 16);
+    let new_size = file_size + padding;
 
-    // Check if the file is already encrypted
-    if check_if_encrypted(&data) {
-        return Err("File is already encrypted".into());
+    // Step 2: Resize file to accommodate padding
+    file.set_len(new_size as u64)?;
+
+    // Step 3: Memory-map the file for fast access
+    let mut mmap = unsafe { MmapMut::map_mut(&file)? };
+
+    // Step 4: Apply PKCS7 padding directly into memory
+    for i in 0..padding {
+        mmap[file_size + i] = padding as u8;
     }
 
-    // Step 2: Create a temporary file for encryption
-    let temp_file_path = format!("{}.tmp", file_path);
-    let mut temp_file = File::create(&temp_file_path)
-        .map_err(|e| format!("Failed to create temporary file: {}", e))?;
-
-    // Step 3: Add padding to the file content (PKCS7-like padding)
-    let padding = 16 - (data.len() % 16);
-    data.extend(iter::repeat(padding as u8).take(padding));
-
-    // Encrypt each 16-byte chunk
-    for chunk in data.chunks_mut(16) {
+    // Step 5: Encrypt sequentially
+    for chunk in mmap.chunks_mut(16) {
         cipher.encrypt_block(GenericArray::from_mut_slice(chunk));
     }
 
-    // Step 4: Write the encrypted content (including the magic number) to the temporary file
-    temp_file.write_all(magic_number)?;
-    temp_file.write_all(&data)?;
-    temp_file.flush()?;
+    // Step 6: Write encrypted content to a new file
+    let temp_file_path = file_path.with_extension("enc.tmp");
+    let temp_file = File::create(&temp_file_path)?;
+    let mut writer = BufWriter::new(temp_file);
 
-    // Step 5: Replace the original file with the temporary file
-    fs::rename(&temp_file_path, file_path)
-        .map_err(|e| format!("Failed to replace original file with encrypted file: {}", e))?;
+    writer.write_all(magic_number)?;
+    writer.write_all(&mmap)?;
+    writer.flush()?;
 
-    // Step 6: Success message
-    println!("{}", "File encrypted successfully.".red().bold());
+    // Step 7: Replace the original file
+    fs::rename(temp_file_path, file_path)?;
+
     Ok(())
 }
 
+// Function to encrypt all files in a directory
+pub fn encrypt_directory(
+    root_path: PathBuf,
+    magic_number: &[u8],
+    cipher: Arc<impl BlockEncrypt + Send + Sync>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let files = files_dir_explorer(root_path.clone())?;
+    let mut sp = Spinner::new(Spinners::Line, "Waiting for decryption...".into());
+
+    if files.is_empty() {
+        return Err("No files found".into());
+    }
+
+    let encrypted_files: Vec<PathBuf> = files
+        .par_iter()
+        .filter_map(|file| match encrypt_file(file, magic_number, &*cipher) {
+            Ok(_) => Some(file.clone()),
+            Err(e) => {
+                eprintln!("Failed to encrypt {}: {}", file.display(), e);
+                None
+            }
+        })
+        .collect();
+
+    // Save encrypted file paths to JSON
+    let json_file_path = root_path.join("encrypted_files.json");
+    let json_file = File::create(&json_file_path)?;
+    serde_json::to_writer_pretty(
+        json_file,
+        &EncryptedFilesPath {
+            path: encrypted_files,
+        },
+    )?;
+    sp.stop_with_newline();
+    println!("Encrypted file paths saved to {}", json_file_path.display());
+    Ok(())
+}
 pub fn decrypt_file(
-    file_path: &str,
+    file_path: &Path,
     magic_number: &[u8],
     cipher: impl BlockDecrypt,
-) -> Result<(), Box<dyn Error>> {
-    let path = Path::new(file_path);
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let path = file_path;
     let mut data = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     if !data.starts_with(magic_number) {
@@ -139,11 +186,12 @@ pub fn decrypt_file(
     }
 
     fs::write(path, &data).map_err(|e| format!("Failed to write decrypted file: {}", e))?;
-    println!("File decrypted successfully.");
     Ok(())
 }
 
-pub fn files_dir_explorer(root_path: PathBuf) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+pub fn files_dir_explorer(
+    root_path: PathBuf,
+) -> Result<Vec<PathBuf>, Box<dyn Error + Send + Sync>> {
     let mut files = Vec::new();
     let mut dirs = vec![root_path];
 
@@ -162,4 +210,36 @@ pub fn files_dir_explorer(root_path: PathBuf) -> Result<Vec<PathBuf>, Box<dyn Er
     }
 
     Ok(files)
+}
+pub fn decrypt_directory(
+    root_path: PathBuf,
+    magic_number: &[u8],
+    cipher: Arc<impl BlockDecrypt + Send + Sync>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let json_file_path = root_path.join("encrypted_files.json");
+    let mut sp = Spinner::new(Spinners::Line, "Waiting for decryption...".into());
+
+    let encrypted_files = if json_file_path.exists() {
+        // Read encrypted files from JSON
+        let files: EncryptedFilesPath = serde_json::from_reader(File::open(&json_file_path)?)?;
+        fs::remove_file(&json_file_path)?; // Remove JSON after reading
+        files.path
+    } else {
+        // If JSON does not exist, scan directory
+        files_dir_explorer(root_path)?
+    };
+
+    if encrypted_files.is_empty() {
+        sp.stop_with_newline();
+        return Err("No encrypted files found!".into());
+    }
+
+    // Decrypt each file in parallel
+    encrypted_files
+        .par_iter()
+        .try_for_each(|file| decrypt_file(file, magic_number, &*cipher))?;
+
+    sp.stop_with_newline();
+    println!("{}", "All files decrypted successfully.".green().bold());
+    Ok(())
 }

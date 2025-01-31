@@ -1,2 +1,3 @@
 /target
 *.key
+/test_dir
