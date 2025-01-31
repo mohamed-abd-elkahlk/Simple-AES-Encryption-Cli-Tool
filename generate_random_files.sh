@@ -21,7 +21,7 @@ generate_1g_file() {
     local filepath="$dir/$filename"
     
     echo "Generating 1GB file: $filepath"
-    dd if=/dev/zero of="$filepath" bs=1G count=1
+    dd if=/dev/zero of="$filepath" bs=1M count=1
 }
 
 # Generate files in different directories with different extensions

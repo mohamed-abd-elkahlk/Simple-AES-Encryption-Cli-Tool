@@ -2,9 +2,16 @@ use aes::{
     cipher::{generic_array::GenericArray, KeyInit},
     Aes128, Aes192, Aes256,
 };
+mod ecb;
+mod tests;
 use cipher_cli::*;
 use colored::*;
 use dialoguer::{Confirm, Input, Select};
+use ecb::*;
+
+// TODO:add --> CBC (Cipher Block Chaining) Requires padding, sequential processing
+// TODO:add --> CTR (Counter Mode) Requires a unique nonce per encryption
+// TODO:add --> GCM (Galois/Counter Mode) Complex, requires nonce management
 
 use std::{error::Error, fs, path::PathBuf, sync::Arc};
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {

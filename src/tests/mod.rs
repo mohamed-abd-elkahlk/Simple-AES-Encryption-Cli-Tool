@@ -5,10 +5,12 @@ mod tests {
         Aes128,
     };
     use cipher_cli::{
-        decrypt_file, encrypt_file, generate_key, read_key_from_file, save_key_to_file,
-        MAGIC_NUMBER_128, MAGIC_NUMBER_192, MAGIC_NUMBER_256,
+        generate_key, read_key_from_file, save_key_to_file, MAGIC_NUMBER_128, MAGIC_NUMBER_192,
+        MAGIC_NUMBER_256,
     };
     use std::{fs, path::PathBuf};
+
+    use crate::ecb::{decrypt_file, encrypt_file};
 
     fn create_temp_file(content: &str) -> PathBuf {
         let file_path = format!("test_file_{}.txt", uuid::Uuid::new_v4());
